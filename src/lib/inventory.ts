@@ -14,6 +14,15 @@ export const kindLabels: Record<MovementKind, string> = {
 export const isEntry = (kind: MovementKind) =>
   kind === "purchase" || kind === "adjustment_in";
 export function validateProduct(input: ProductInput) {
+  for (const [key, limit] of [
+    ["description", 2000],
+    ["barcode", 80],
+    ["supplier", 160],
+    ["location", 160],
+  ] as const) {
+    if ((input[key]?.length ?? 0) > limit)
+      throw new Error(`Campo ${key} muito longo (máximo ${limit}).`);
+  }
   if (!input.name.trim()) throw new Error("Informe o nome do produto.");
   if (
     input.name.length > 160 ||

@@ -1,21 +1,29 @@
-import { useEffect, useState } from "react";
+import {
+  Component,
+  useEffect,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
 import type { Session } from "@supabase/supabase-js";
 import {
   ArrowDownUp,
   ArrowUpRight,
+  BarChart3,
+  Bell,
   Calculator as CalculatorIcon,
+  CheckCircle2,
   Download,
   LayoutDashboard,
   LogOut,
+  Moon,
   Package,
-  Pencil,
   Plus,
   RefreshCw,
-  Search,
   Settings,
   ShieldCheck,
   ShoppingBag,
-  Archive,
+  Sun,
   X,
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
@@ -23,24 +31,81 @@ import { Auth } from "./components/Auth";
 import { Calculator } from "./components/Calculator";
 import { ProductForm, MovementForm } from "./components/ProductForms";
 import { Dialog } from "./components/Dialog";
+import { Catalog } from "./components/Catalog";
+import { Reports } from "./components/Reports";
+import { Movements } from "./components/Movements";
+import { SettingsPanel } from "./components/SettingsPanel";
+import { ImportDialog } from "./components/ImportDialog";
+import { ProductImage } from "./components/ProductImage";
 import { useInventory } from "./hooks/useInventory";
-import { margin, money } from "./lib/finance";
-import { csvCell, isEntry, kindLabels } from "./lib/inventory";
-import type { Product } from "./types";
+import { money } from "./lib/finance";
+import { reorder, summarize } from "./lib/reports";
+import { downloadCsv } from "./lib/csv";
+import { clearImageCache } from "./lib/images";
+import type { MovementKind, Product } from "./types";
 const tabs = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
   { id: "products", label: "Produtos", icon: Package },
   { id: "movements", label: "Movimentações", icon: ArrowDownUp },
+  { id: "reports", label: "Relatórios", icon: BarChart3 },
   { id: "calculator", label: "Calculadora", icon: CalculatorIcon },
   { id: "settings", label: "Configurações", icon: Settings },
 ] as const;
 type Tab = (typeof tabs)[number]["id"];
+function preference(key: string, fallback: string) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+export class AppBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(_error: Error, _info: ErrorInfo) {
+    /* Do not emit user data to third-party logs. */
+  }
+  render() {
+    return this.state.failed ? (
+      <main className="loading">
+        <div className="panel">
+          <h1>Vamos recuperar seu espaço.</h1>
+          <p>
+            O aplicativo encontrou um erro inesperado. Seus dados no Supabase
+            não foram apagados.
+          </p>
+          <button className="primary" onClick={() => window.location.reload()}>
+            Recarregar aplicativo
+          </button>
+        </div>
+      </main>
+    ) : (
+      this.props.children
+    );
+  }
+}
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [demo, setDemo] = useState(false);
   const [ready, setReady] = useState(!supabase);
   const [error, setError] = useState("");
   const [recover, setRecover] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    preference("reposita.theme", "light") === "dark" ? "dark" : "light",
+  );
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("reposita.theme", theme);
+    } catch {
+      /* Only a preference. */
+    }
+  }, [theme]);
   useEffect(() => {
     if (!supabase) return;
     let alive = true;
@@ -62,6 +127,7 @@ export default function App() {
       setSession(next);
       setReady(true);
       if (event === "PASSWORD_RECOVERY") setRecover(true);
+      if (event === "SIGNED_OUT") clearImageCache();
     });
     return () => {
       alive = false;
@@ -89,6 +155,9 @@ export default function App() {
           key={demo ? "demo" : session!.user.id}
           demo={demo}
           email={session?.user.email}
+          userId={demo ? "demo" : session!.user.id}
+          theme={theme}
+          setTheme={setTheme}
           exit={async () => {
             if (demo) {
               setDemo(false);
@@ -153,107 +222,136 @@ function PasswordRecovery({ close }: { close: () => void }) {
 function Workspace({
   demo,
   email,
+  userId,
+  theme,
+  setTheme,
   exit,
 }: {
   demo: boolean;
   email?: string;
+  userId: string;
+  theme: "light" | "dark";
+  setTheme: (value: "light" | "dark") => void;
   exit: () => Promise<void>;
 }) {
   const inventory = useInventory(demo);
   const [tab, setTab] = useState<Tab>("overview");
-  const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("");
-  const [lowOnly, setLowOnly] = useState(false);
+  const [lowFilter, setLowFilter] = useState(false);
   const [productForm, setProductForm] = useState<Product | "new" | null>(null);
-  const [movementForm, setMovementForm] = useState(false);
+  const [movementForm, setMovementForm] = useState<{
+    product?: string;
+    kind?: MovementKind;
+  } | null>(null);
   const [archive, setArchive] = useState<Product | null>(null);
   const [actionError, setActionError] = useState("");
-  const active = inventory.products.filter((p) => p.active);
-  const low = active.filter((p) => p.stock <= p.min_stock);
-  const filtered = active.filter(
-    (p) =>
-      (p.name + " " + p.sku)
-        .toLocaleLowerCase("pt-BR")
-        .includes(query.toLocaleLowerCase("pt-BR")) &&
-      (!category || p.category === category) &&
-      (!lowOnly || p.stock <= p.min_stock),
+  const [importOpen, setImportOpen] = useState(false);
+  const [toast, setToast] = useState("");
+  const [upgraded, setUpgraded] = useState<boolean | null>(demo ? true : null);
+  const [name, setName] = useState(() =>
+    preference("reposita.business." + userId, "Meu negócio"),
   );
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(""), 5000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+  useEffect(() => {
+    if (demo || !supabase) return;
+    let alive = true;
+    supabase
+      .from("reposita_products")
+      .select("image_path")
+      .limit(1)
+      .then(({ error }) => {
+        if (alive) setUpgraded(!error);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [demo, inventory.loading]);
+  const active = inventory.products.filter((p) => p.active);
+  const low = active.filter((p) => reorder(p) > 0);
   const costValue = active.reduce((a, p) => a + p.stock * p.cost, 0);
   const saleValue = active.reduce((a, p) => a + p.stock * p.price, 0);
-  const sales = inventory.movements.filter((m) => m.kind === "sale");
-  const gross = sales.reduce(
-    (a, m) => a + m.quantity * (m.unit_price - m.unit_cost),
-    0,
-  );
-  function exportCsv() {
-    const rows = [
+  const report = summarize(inventory, "", "");
+  const title = tabs.find((t) => t.id === tab)!.label;
+  function goProducts(lowOnly = false) {
+    setLowFilter(lowOnly);
+    setTab("products");
+  }
+  function exportReorder() {
+    downloadCsv("reposita-lista-de-compras.csv", [
       [
         "Produto",
         "SKU",
-        "Categoria",
-        "Estoque",
-        "Estoque mínimo",
-        "Custo unitário",
-        "Preço de venda",
-        "Margem bruta %",
+        "Fornecedor",
+        "Saldo",
+        "Mínimo",
+        "Quantidade sugerida",
+        "Custo estimado",
       ],
-      ...filtered.map((p) => [
+      ...low.map((p) => [
         p.name,
         p.sku,
-        p.category,
+        p.supplier ?? "",
         p.stock,
         p.min_stock,
-        p.cost.toFixed(2).replace(".", ","),
-        p.price.toFixed(2).replace(".", ","),
-        margin(p.cost, p.price)?.toFixed(2).replace(".", ",") ?? "",
+        reorder(p),
+        (reorder(p) * p.cost).toFixed(2).replace(".", ","),
       ]),
-    ];
-    const url = URL.createObjectURL(
-      new Blob(
-        ["\uFEFF" + rows.map((row) => row.map(csvCell).join(";")).join("\r\n")],
-        { type: "text/csv;charset=utf-8;" },
-      ),
-    );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `reposita-produtos-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    ]);
   }
-  const title = tabs.find((t) => t.id === tab)!.label;
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        Ir para o conteúdo
+      </a>
       <aside className="sidebar">
         <a className="brand" href="#" onClick={() => setTab("overview")}>
           <b>r.</b>
-          <span>reposita</span>
+          <span>
+            reposita<small>BUSINESS WORKSPACE</small>
+          </span>
         </a>
-        <span className="sidebar-caption">SEU NEGÓCIO</span>
+        <span className="sidebar-caption">ORGANIZE. ENTENDA. CRESÇA.</span>
         <nav aria-label="Menu principal">
           {tabs.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               title={label}
+              aria-label={label}
               aria-current={tab === id ? "page" : undefined}
               className={tab === id ? "active" : ""}
-              onClick={() => setTab(id)}
+              onClick={() => {
+                setTab(id);
+                if (id === "products") setLowFilter(false);
+              }}
             >
               <Icon size={19} />
               <span>{label}</span>
+              {id === "products" && low.length > 0 && (
+                <i className="nav-count">{low.length}</i>
+              )}
             </button>
           ))}
         </nav>
         <div className="side-tip">
           <ShieldCheck size={24} />
           <strong>
-            Controle hoje.
+            Seu próximo nível
             <br />
-            Cresça amanhã.
+            começa no controle.
           </strong>
-          <p>Um bom resultado começa com um estoque bem cuidado.</p>
+          <p>
+            Estoque, preço e resultado.
+            <br />
+            Tudo no lugar certo.
+          </p>
+          <span className="version-label">REPOSITA · PROFESSIONAL</span>
         </div>
         <button
           className="account"
+          title="Sair"
           onClick={() => {
             void exit();
           }}
@@ -263,31 +361,66 @@ function Workspace({
           </span>
           <span>
             {demo ? "Demonstração" : email}
-            <small>{demo ? "Somente neste navegador" : "Conta pessoal"}</small>
+            <small>
+              {demo ? "Somente neste navegador" : "Conta protegida"}
+            </small>
           </span>
           <LogOut size={16} />
         </button>
       </aside>
-      <main className="workspace">
+      <main className="workspace" id="main-content">
         <div className="topline">
           <span>
-            Workspace <span>/</span> {title}
+            {name}
+            <span>/</span>
+            {title}
           </span>
-          <span className="mode-badge">
-            <i />
-            {demo ? "Demo local" : "Supabase conectado"}
-          </span>
+          <div className="topline-actions">
+            <button
+              className="icon-button"
+              aria-label={
+                theme === "light" ? "Ativar modo escuro" : "Ativar modo claro"
+              }
+              title="Trocar tema"
+              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+            >
+              {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
+            </button>
+            <button
+              className="icon-button notification-button"
+              title={`${low.length} produtos para repor`}
+              aria-label="Ver alertas de reposição"
+              onClick={() => goProducts(true)}
+            >
+              <Bell size={17} />
+              {low.length > 0 && <i />}
+            </button>
+            <span className="mode-badge">
+              <i />
+              {demo
+                ? "Demo local"
+                : inventory.error
+                  ? "Verificar conexão"
+                  : "Conta conectada"}
+            </span>
+          </div>
         </div>
         <header className="page-header">
           <div>
-            <span className="eyebrow">CLAREZA PARA DECIDIR</span>
+            <span className="eyebrow">
+              {tab === "overview"
+                ? "VISÃO CLARA. DECISÕES MELHORES."
+                : "SEU NEGÓCIO, BEM ORGANIZADO."}
+            </span>
             <h1>
-              {tab === "overview" ? "Seu negócio, em perspectiva." : title}
+              {tab === "overview"
+                ? "Mais controle. Mais possibilidades."
+                : title}
             </h1>
             <p>
               {tab === "overview"
-                ? "Enxergue seu estoque. Entenda seu potencial. Dê o próximo passo."
-                : "Informações organizadas para você trabalhar melhor."}
+                ? "O essencial do seu negócio, com a clareza que ele merece."
+                : "Uma operação mais simples, do primeiro produto ao próximo crescimento."}
             </p>
           </div>
           <div className="header-actions">
@@ -300,7 +433,10 @@ function Workspace({
                 void inventory.reload();
               }}
             >
-              <RefreshCw size={18} />
+              <RefreshCw
+                size={18}
+                className={inventory.loading ? "spin" : ""}
+              />
             </button>
             <button
               className="primary"
@@ -317,18 +453,32 @@ function Workspace({
         {demo && (
           <div className="demo-banner">
             <span>
-              <strong>Você está no modo demonstração.</strong> Alterações ficam
-              salvas apenas neste navegador, não no Supabase.
+              <strong>Seu ambiente de demonstração.</strong> Produtos e fotos
+              ficam somente neste navegador.
             </span>
             {!inventory.products.length && (
               <button
-                disabled={inventory.loading}
                 className="text-button"
+                disabled={inventory.loading}
                 onClick={inventory.examples}
               >
                 Carregar exemplos
               </button>
             )}
+          </div>
+        )}
+        {!demo && upgraded === false && !inventory.error && (
+          <div className="upgrade-banner">
+            <div>
+              <strong>Tem novidade no seu Reposita.</strong>
+              <span>
+                Ative fotos privadas, campos avançados e importação aplicando a
+                atualização SQL — sem apagar seus dados.
+              </span>
+            </div>
+            <button className="secondary" onClick={() => setTab("settings")}>
+              Ver instruções <ArrowUpRight size={15} />
+            </button>
           </div>
         )}
         {inventory.error ? (
@@ -346,6 +496,7 @@ function Workspace({
           </div>
         ) : inventory.loading ? (
           <section className="panel loading" role="status">
+            <div className="loader" />
             Carregando produtos e movimentações…
           </section>
         ) : (
@@ -362,7 +513,7 @@ function Workspace({
                   <Stat
                     label="Venda potencial"
                     value={money(saleValue)}
-                    hint="Se todo o estoque for vendido"
+                    hint="Se todo o saldo for vendido"
                     icon={<ShoppingBag />}
                   />
                   <Stat
@@ -372,7 +523,7 @@ function Workspace({
                     icon={<ArrowUpRight />}
                   />
                   <Stat
-                    label="Precisam de reposição"
+                    label="Alertas de reposição"
                     value={String(low.length).padStart(2, "0")}
                     hint="No mínimo ou abaixo dele"
                     icon={<ArrowDownUp />}
@@ -382,19 +533,20 @@ function Workspace({
                 <div className="overview-grid">
                   <section className="panel opportunities">
                     <div className="section-heading">
-                      <h2>Seu próximo movimento</h2>
+                      <div>
+                        <span className="eyebrow">SEU PRÓXIMO MOVIMENTO</span>
+                        <h2>O que merece atenção agora?</h2>
+                      </div>
                       <span className="tag">Reposição</span>
                     </div>
                     <p>
-                      Priorize produtos com saldo no limite. Sugestão: repor até
-                      duas vezes o mínimo configurado.
+                      Priorize o que está no limite. Quantidade sugerida: saldo
+                      até duas vezes o mínimo.
                     </p>
                     {low.length ? (
                       low.slice(0, 5).map((p) => (
                         <div className="reorder-row" key={p.id}>
-                          <div className="product-mark">
-                            {p.name.slice(0, 1)}
-                          </div>
+                          <ProductImage path={p.image_path} name={p.name} />
                           <div>
                             <strong>{p.name}</strong>
                             <small>
@@ -402,343 +554,216 @@ function Workspace({
                             </small>
                           </div>
                           <span className="badge warning">
-                            +{Math.max(p.min_stock * 2 - p.stock, 1)} un.
+                            +{reorder(p)} un.
                           </span>
+                          <button
+                            className="icon-button"
+                            title="Registrar compra"
+                            aria-label={`Comprar ${p.name}`}
+                            onClick={() =>
+                              setMovementForm({
+                                product: p.id,
+                                kind: "purchase",
+                              })
+                            }
+                          >
+                            <Plus size={16} />
+                          </button>
                         </div>
                       ))
                     ) : (
                       <div className="empty-compact">
-                        {active.length
-                          ? "Nenhum produto abaixo do limite. Estoque em dia."
-                          : "Adicione seu primeiro produto para começar."}
+                        <CheckCircle2 size={26} />
+                        <span>
+                          {active.length
+                            ? "Tudo em dia por aqui. Nenhum produto abaixo do limite."
+                            : "Seu novo começo está aqui. Cadastre o primeiro produto."}
+                        </span>
                       </div>
                     )}
-                    <button
-                      className="text-button"
-                      onClick={() => {
-                        setTab("products");
-                        setLowOnly(true);
-                      }}
-                    >
-                      Ver produtos para repor <ArrowUpRight size={15} />
-                    </button>
+                    <div className="section-bottom">
+                      <button
+                        className="text-button"
+                        onClick={() => goProducts(true)}
+                      >
+                        Ver itens para repor <ArrowUpRight size={15} />
+                      </button>
+                      <button
+                        className="text-button"
+                        disabled={!low.length}
+                        onClick={exportReorder}
+                      >
+                        <Download size={14} />
+                        Lista de compras
+                      </button>
+                    </div>
                   </section>
                   <section className="panel dark-panel">
-                    <span className="eyebrow">PRECIFICAÇÃO INTELIGENTE</span>
-                    <CalculatorIcon size={36} />
+                    <span className="eyebrow">DÊ VALOR AO SEU RESULTADO</span>
+                    <div className="calc-3d">
+                      <CalculatorIcon size={35} />
+                    </div>
                     <h2>
-                      O preço certo não
+                      Um preço bem pensado.
                       <br />
-                      nasce do palpite.
+                      Um negócio mais forte.
                     </h2>
                     <p>
-                      Simule custos, taxas e margem antes de colocar seu próximo
-                      produto à venda.
+                      Frete, taxas, despesas e margem. Descubra quanto sua venda
+                      realmente deixa.
                     </p>
                     <button
                       className="mint-button"
                       onClick={() => setTab("calculator")}
                     >
-                      Calcular meu preço <ArrowUpRight size={17} />
+                      Encontrar meu preço <ArrowUpRight size={17} />
                     </button>
                   </section>
                 </div>
                 <section className="panel summary-strip">
                   <div>
                     <small>Vendas registradas · todo o histórico</small>
-                    <strong>
-                      {money(
-                        sales.reduce(
-                          (a, m) => a + m.quantity * m.unit_price,
-                          0,
-                        ),
-                      )}
-                    </strong>
+                    <strong>{money(report.revenue)}</strong>
                   </div>
                   <div>
                     <small>Lucro bruto dessas vendas</small>
-                    <strong>{money(gross)}</strong>
+                    <strong>{money(report.profit)}</strong>
                   </div>
-                  <p>
-                    Baseado nas saídas do tipo venda e no custo informado em
-                    cada movimentação. Não representa lucro líquido.
-                  </p>
-                </section>
-              </>
-            )}
-            {tab === "products" && (
-              <section className="panel">
-                <div className="section-heading">
                   <div>
-                    <h2>Seu catálogo</h2>
-                    <p>{filtered.length} produtos encontrados</p>
+                    <small>Unidades vendidas</small>
+                    <strong>{report.units}</strong>
                   </div>
                   <button
                     className="secondary"
-                    disabled={!filtered.length}
-                    onClick={exportCsv}
+                    onClick={() => setTab("reports")}
                   >
-                    <Download size={16} />
-                    Exportar CSV
+                    Explorar relatórios <ArrowUpRight size={16} />
+                  </button>
+                </section>
+                <div className="quick-actions">
+                  <button onClick={() => goProducts()}>
+                    <Package size={21} />
+                    <span>
+                      <strong>Organize seu catálogo</strong>
+                      <small>Fotos, preços e informações completas</small>
+                    </span>
+                    <ArrowUpRight size={18} />
+                  </button>
+                  <button
+                    disabled={!active.length}
+                    onClick={() => setMovementForm({})}
+                  >
+                    <ArrowDownUp size={21} />
+                    <span>
+                      <strong>Registre uma movimentação</strong>
+                      <small>Compra, venda ou ajuste de saldo</small>
+                    </span>
+                    <ArrowUpRight size={18} />
                   </button>
                 </div>
-                <div className="filters">
-                  <label className="search-field">
-                    <Search size={17} />
-                    <input
-                      aria-label="Buscar por nome ou SKU"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      placeholder="Buscar por nome ou SKU…"
-                    />
-                  </label>
-                  <select
-                    aria-label="Filtrar categoria"
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                  >
-                    <option value="">Todas as categorias</option>
-                    {[...new Set(active.map((p) => p.category))]
-                      .sort()
-                      .map((c) => (
-                        <option key={c}>{c}</option>
-                      ))}
-                  </select>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={lowOnly}
-                      onChange={(e) => setLowOnly(e.target.checked)}
-                    />
-                    Somente reposição
-                  </label>
-                </div>
-                {!filtered.length ? (
-                  <div className="empty">
-                    <Package size={30} />
-                    <h3>Nenhum produto por aqui</h3>
-                    <p>Adicione um produto ou ajuste seus filtros.</p>
-                    <button
-                      className="primary"
-                      onClick={() => setProductForm("new")}
-                    >
-                      Adicionar produto
-                    </button>
-                  </div>
-                ) : (
-                  <div className="table-scroll">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Produto / SKU</th>
-                          <th>Categoria</th>
-                          <th>Saldo / mínimo</th>
-                          <th>Custo</th>
-                          <th>Venda</th>
-                          <th>Margem bruta</th>
-                          <th>Ações</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filtered.map((p) => (
-                          <tr key={p.id}>
-                            <td>
-                              <strong>{p.name}</strong>
-                              <small>{p.sku || "Sem SKU"}</small>
-                            </td>
-                            <td>
-                              <span className="tag">{p.category}</span>
-                            </td>
-                            <td>
-                              <span
-                                className={
-                                  p.stock <= p.min_stock ? "warning-text" : ""
-                                }
-                              >
-                                {p.stock} / {p.min_stock} un.
-                              </span>
-                            </td>
-                            <td>{money(p.cost)}</td>
-                            <td>{money(p.price)}</td>
-                            <td>
-                              {margin(p.cost, p.price)?.toFixed(1) ?? "—"}
-                              {p.price > 0 && "%"}
-                            </td>
-                            <td>
-                              <div className="row-actions">
-                                <button
-                                  className="icon-button"
-                                  aria-label={`Editar ${p.name}`}
-                                  onClick={() => setProductForm(p)}
-                                >
-                                  <Pencil size={16} />
-                                </button>
-                                <button
-                                  className="icon-button"
-                                  aria-label={`Arquivar ${p.name}`}
-                                  onClick={() => {
-                                    setArchive(p);
-                                    setActionError("");
-                                  }}
-                                >
-                                  <Archive size={16} />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
+              </>
+            )}
+            {tab === "products" && (
+              <Catalog
+                key={String(lowFilter)}
+                data={inventory}
+                initialLow={lowFilter}
+                edit={setProductForm}
+                create={() => setProductForm("new")}
+                archive={(p) => {
+                  setArchive(p);
+                  setActionError("");
+                }}
+                restore={async (p) => {
+                  try {
+                    await inventory.restore(p.id);
+                    setToast("Produto restaurado.");
+                  } catch (e) {
+                    setActionError((e as Error).message);
+                  }
+                }}
+                sale={(p) => setMovementForm({ product: p.id, kind: "sale" })}
+                importCsv={() => setImportOpen(true)}
+                busy={inventory.busy}
+              />
             )}
             {tab === "movements" && (
-              <section className="panel">
-                <div className="section-heading">
-                  <div>
-                    <h2>Entradas e saídas</h2>
-                    <p>
-                      Histórico preservado, inclusive de produtos arquivados.
-                    </p>
-                  </div>
-                  <button
-                    className="primary"
-                    disabled={!active.length || inventory.busy}
-                    onClick={() => setMovementForm(true)}
-                  >
-                    <Plus size={17} />
-                    Registrar
-                  </button>
-                </div>
-                {!inventory.movements.length ? (
-                  <div className="empty">
-                    <ArrowDownUp size={30} />
-                    <h3>Ainda não há movimentações</h3>
-                    <p>
-                      Cadastre um produto e registre uma compra, venda ou
-                      ajuste.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="table-scroll">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Data</th>
-                          <th>Produto</th>
-                          <th>Tipo</th>
-                          <th>Quantidade</th>
-                          <th>Custo un.</th>
-                          <th>Venda un.</th>
-                          <th>Observação</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {inventory.movements.map((m) => (
-                          <tr key={m.id}>
-                            <td>
-                              {new Date(m.created_at).toLocaleString("pt-BR")}
-                            </td>
-                            <td>
-                              {inventory.products.find(
-                                (p) => p.id === m.product_id,
-                              )?.name ?? "Produto arquivado"}
-                            </td>
-                            <td>{kindLabels[m.kind]}</td>
-                            <td
-                              className={isEntry(m.kind) ? "positive-text" : ""}
-                            >
-                              {isEntry(m.kind) ? "+" : "−"}
-                              {m.quantity}
-                            </td>
-                            <td>{money(m.unit_cost)}</td>
-                            <td>
-                              {m.kind === "sale" ? money(m.unit_price) : "—"}
-                            </td>
-                            <td>{m.note || "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
+              <Movements
+                data={inventory}
+                create={() => setMovementForm({})}
+                busy={inventory.busy}
+              />
             )}
+            {tab === "reports" && <Reports data={inventory} />}
             {tab === "calculator" && <Calculator />}
             {tab === "settings" && (
-              <section className="panel settings-panel">
-                <span className="eyebrow">CONEXÃO E SEGURANÇA</span>
-                <h2>O lugar dos seus dados</h2>
-                <dl>
-                  <div>
-                    <dt>Modo atual</dt>
-                    <dd>{demo ? "Demonstração local" : "Conta Supabase"}</dd>
-                  </div>
-                  <div>
-                    <dt>Autenticação configurada</dt>
-                    <dd>{supabase ? "Sim" : "Não"}</dd>
-                  </div>
-                  <div>
-                    <dt>Armazenamento</dt>
-                    <dd>
-                      {demo
-                        ? "localStorage deste navegador"
-                        : "Postgres com Row Level Security"}
-                    </dd>
-                  </div>
-                </dl>
-                <h3>Conectar o Supabase</h3>
-                <ol>
-                  <li>
-                    Execute a migration SQL do repositório no SQL Editor do seu
-                    projeto Supabase.
-                  </li>
-                  <li>
-                    Na Vercel, configure <code>VITE_SUPABASE_URL</code> e{" "}
-                    <code>VITE_SUPABASE_ANON_KEY</code>.
-                  </li>
-                  <li>
-                    Ative o login por e-mail no Supabase e configure a URL do
-                    site e de redirecionamento.
-                  </li>
-                  <li>
-                    Faça um novo deploy e crie sua conta. Dados de demonstração
-                    não migram automaticamente.
-                  </li>
-                </ol>
-                <p className="notice">
-                  Use somente a chave pública anon/publishable. Nunca coloque a
-                  chave secreta service_role no navegador ou neste repositório.
-                </p>
-                <a
-                  className="text-link"
-                  target="_blank"
-                  rel="noreferrer"
-                  href="https://github.com/Felipeluna92/reposita#readme"
-                >
-                  Abrir instruções completas no GitHub ↗
-                </a>
-              </section>
+              <SettingsPanel
+                demo={demo}
+                email={email}
+                name={name}
+                setName={(value) => {
+                  setName(value);
+                  try {
+                    localStorage.setItem("reposita.business." + userId, value);
+                  } catch {
+                    setToast(
+                      "Nome alterado, mas não foi possível salvar a preferência local.",
+                    );
+                  }
+                }}
+                theme={theme}
+                setTheme={setTheme}
+                data={inventory}
+                upgraded={upgraded}
+              />
             )}
           </>
         )}
+        {actionError && !archive && (
+          <p role="alert" className="error">
+            {actionError}
+            <button className="text-button" onClick={() => setActionError("")}>
+              Fechar
+            </button>
+          </p>
+        )}
         <footer>
-          Reposita <span>•</span> Clareza no estoque. Confiança nas decisões.
+          <span className="footer-brand">reposita</span>
+          <span>•</span>Clareza no estoque. Confiança nas decisões.
+          <span className="footer-version">v0.3</span>
         </footer>
       </main>
       {productForm && (
         <ProductForm
+          demo={demo}
           product={productForm === "new" ? undefined : productForm}
           close={() => setProductForm(null)}
-          save={inventory.save}
+          save={async (input, id) => {
+            await inventory.save(input, id);
+            setToast("Produto salvo com sucesso.");
+          }}
         />
       )}
       {movementForm && (
         <MovementForm
           products={active}
-          close={() => setMovementForm(false)}
-          save={inventory.move}
+          initialProduct={movementForm.product}
+          initialKind={movementForm.kind}
+          close={() => setMovementForm(null)}
+          save={async (movement) => {
+            await inventory.move(movement);
+            setToast("Movimentação registrada. Saldo atualizado.");
+          }}
+        />
+      )}
+      {importOpen && (
+        <ImportDialog
+          products={inventory.products}
+          close={() => setImportOpen(false)}
+          save={async (items, request) => {
+            await inventory.importItems(items, request);
+            setToast(`${items.length} produtos importados.`);
+          }}
         />
       )}
       {archive && (
@@ -748,9 +773,9 @@ function Workspace({
           busy={inventory.busy}
         >
           <p>
-            <strong>{archive.name}</strong> sairá do catálogo ativo. Seu
-            histórico continuará disponível. É necessário saldo zero: primeiro
-            registre uma saída, se apropriado, com justificativa.
+            <strong>{archive.name}</strong> sairá do catálogo ativo, mas o
+            histórico será preservado. O saldo precisa estar zerado antes de
+            arquivar. Você poderá restaurá-lo depois.
           </p>
           {actionError && (
             <p role="alert" className="error">
@@ -772,6 +797,7 @@ function Workspace({
                 try {
                   await inventory.archive(archive.id);
                   setArchive(null);
+                  setToast("Produto arquivado. Histórico preservado.");
                 } catch (e) {
                   setActionError((e as Error).message);
                 }
@@ -781,6 +807,15 @@ function Workspace({
             </button>
           </div>
         </Dialog>
+      )}
+      {toast && (
+        <div className="toast" role="status">
+          <CheckCircle2 size={19} />
+          <span>{toast}</span>
+          <button aria-label="Fechar notificação" onClick={() => setToast("")}>
+            <X size={16} />
+          </button>
+        </div>
       )}
     </div>
   );
@@ -795,17 +830,20 @@ function Stat({
   label: string;
   value: string;
   hint: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   warning?: boolean;
 }) {
   return (
     <article className={`stat ${warning ? "stat-warning" : ""}`}>
       <div>
         <span>{label}</span>
-        {icon}
+        <span className="stat-icon">{icon}</span>
       </div>
       <strong>{value}</strong>
-      <small>{hint}</small>
+      <small>
+        <i />
+        {hint}
+      </small>
     </article>
   );
 }

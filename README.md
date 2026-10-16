@@ -1,4 +1,4 @@
-# Reposita
+# Reposita Professional · v0.3
 
 Gestão universal de produtos, movimentação de estoque e simulação de preço/lucro. React + TypeScript + Vite, publicado na Vercel; Supabase Auth e Postgres para dados reais. Sem chamadas ao Lovable.
 
@@ -12,7 +12,37 @@ Gestão universal de produtos, movimentação de estoque e simulação de preço
 - Cadastro/login por e-mail e senha, confirmação de e-mail e recuperação de senha via Supabase.
 - Demonstração explicitamente identificada, persistida só no navegador. Não é backup nem banco compartilhado. Exemplos opcionais, nunca inseridos em produção. Não há migração automática dos dados demo.
 
-Não inclui cobrança/assinaturas, equipe multiusuário, importação de CSV, previsão de demanda, custo médio automático ou apuração fiscal. A reposição sugerida é uma regra simples de estoque mínimo, não uma previsão de vendas. Vendas exibidas são todo o histórico, sem recorte mensal.
+### Novidades profissionais
+
+- Fotos por produto: JPG, PNG e WebP até 5 MB, redução para até 1200 px no navegador, bucket privado por usuário e links assinados temporários. No modo demo, foto otimizada até 600 KB, respeitando o limite total do localStorage.
+- Catálogo em cartões ou tabela, paginação, ordenação, busca por nome/SKU/código de barras/fornecedor/localização, detalhes e venda rápida.
+- Descrição, código de barras, fornecedor e localização por produto; restauração de arquivados.
+- Importação CSV com modelo, revisão linha a linha, validação de SKUs e lote transacional/idempotente de até 200 produtos (arquivo até 2 MB). Não sobrescreve produtos existentes.
+- Relatórios por período: receita, custo vendido, lucro/margem bruta, compras, receita diária e ranking de produtos; exportação. Datas conforme fuso do dispositivo.
+- Produtos com saldo e sem venda recente (30 dias), alertas e lista de compras sugerida em CSV.
+- Tema claro/escuro, botões com profundidade 3D, feedback de sucesso, navegação por teclado e respeito a `prefers-reduced-motion`.
+- Exportação JSON de produtos/eventos para cópia manual. Não inclui arquivos de foto nem restauração automática.
+
+Não inclui cobrança/assinaturas, equipe multiusuário, emissão fiscal, pedidos a fornecedores, IA/previsão de demanda, custo médio automático ou apuração fiscal. A reposição sugerida é uma regra simples de estoque mínimo, não uma previsão de vendas. O dashboard resume todo o histórico; Relatórios tem recorte configurável. Uma venda é uma movimentação, não um pedido com múltiplos itens.
+
+## Atualizar uma instalação existente — importante
+
+Se você já executou `202610160001_reposita.sql`, **não execute esse arquivo novamente**.
+
+1. Abra o SQL Editor do mesmo projeto Supabase que já utiliza no Reposita.
+2. Execute [`supabase/migrations/202610160002_professional.sql`](supabase/migrations/202610160002_professional.sql).
+3. Aguarde sucesso e volte ao Reposita. Clique em **Atualizar dados**.
+4. Em Configurações, confira `Fotos e campos avançados: Atualização aplicada`.
+
+A atualização acrescenta colunas e funções, cria bucket privado `reposita-products` e políticas por pasta do usuário. Não apaga produtos, preços, saldos ou eventos. É transacional e pode ser reexecutada: a segunda aplicação foi testada num Postgres isolado. Faça backup adequado antes de qualquer alteração de produção. O catálogo básico continua utilizável antes da atualização; fotos, restauração, campos extras e importação dependem da nova SQL.
+
+### Fotos e privacidade
+
+Arquivos são gravados em `<user_id>/<uuid>.webp` (ou PNG, conforme suporte do navegador). Somente o proprietário pode ler/enviar/excluir objetos na sua pasta; vínculos a arquivos de outra conta são recusados. URLs assinadas são válidas por uma hora e renovadas enquanto a foto está aberta. Uma URL assinada compartilhada funciona até expirar; não a publique. Não há galeria anônima.
+
+Remover/substituir a foto desvincula a referência no produto, mas não apaga automaticamente o arquivo antigo do Storage; evita-se excluir uma foto durante falha entre upload e salvamento. Uploads cancelados também podem deixar arquivos não vinculados. A limpeza é manual no Storage, após conferir referências e cópias. Armazenamento e tráfego seguem a cota do seu plano Supabase; nenhum plano pago foi contratado.
+
+Nome do negócio e tema são preferências locais deste navegador, não configurações fiscais ou compartilhadas entre equipes.
 
 ## Estrutura
 
@@ -47,7 +77,7 @@ Sem variáveis de ambiente, é possível explorar a demonstração. Para dados r
 
 1. No seu projeto Supabase, abra **SQL Editor → New query**.
 2. Copie o conteúdo de [`supabase/migrations/202610160001_reposita.sql`](supabase/migrations/202610160001_reposita.sql) e execute com **Run**. A migration cria somente objetos com prefixo `reposita_`, sem apagar dados de outras aplicações. Execute uma única vez. Se houver erro, a transação é revertida; não remova tabelas para tentar novamente.
-3. Em **Authentication → Providers**, habilite Email. Recomenda-se manter a confirmação de e-mail ativa. Ajuste SMTP e limites de envio antes de um lançamento público.
+3. Execute também `202610160002_professional.sql` para fotos e recursos avançados. Em **Authentication → Providers**, habilite Email. Recomenda-se manter a confirmação de e-mail ativa. Ajuste SMTP e limites de envio antes de um lançamento público.
 4. Em **Authentication → URL Configuration**, defina **Site URL** como o domínio real da Vercel e adicione esse mesmo domínio em **Redirect URLs**. Para desenvolvimento, adicione `http://localhost:5173`. Use URLs específicas para previews; não abra redirecionamentos indiscriminadamente.
 5. Copie `.env.example` para `.env.local` e preencha as configurações públicas. Não versione `.env.local`.
 
@@ -91,4 +121,4 @@ Um push na branch de produção vinculada dispara deploy na Vercel. Este reposit
 
 ## Próximas evoluções
 
-Importação assistida de catálogo, fornecedores, pedidos de compra, análise de giro com período configurável, múltiplas lojas/equipes e faturamento SaaS. Essas evoluções não estão anunciadas como implementadas nesta versão.
+Pedidos de compra com múltiplos itens, custo médio ponderado, gestão de fornecedores em módulo próprio, múltiplas lojas/equipes e faturamento SaaS. Essas evoluções não estão anunciadas como implementadas nesta versão.

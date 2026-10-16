@@ -10,8 +10,20 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 vi.mock("../src/lib/supabase", () => ({ supabase: null, configError: "" }));
+vi.mock("../src/lib/images", async () => {
+  const actual =
+    await vi.importActual<typeof import("../src/lib/images")>(
+      "../src/lib/images",
+    );
+  return {
+    ...actual,
+    storeImage: vi.fn().mockResolvedValue("data:image/webp;base64,AAAA"),
+  };
+});
 beforeEach(() => {
   localStorage.clear();
+  URL.createObjectURL = vi.fn(() => "blob:test-preview");
+  URL.revokeObjectURL = vi.fn();
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute("open", "");
   };
@@ -51,6 +63,101 @@ async function createProduct() {
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 }
 describe("fluxos principais na interface", () => {
+  it("alterna tema e preserva preferência", async () => {
+    render(<App />);
+    await enterDemo();
+    fireEvent.click(screen.getByRole("button", { name: "Ativar modo escuro" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem("reposita.theme")).toBe("dark");
+  });
+  it("salva foto otimizada no produto pelo formulário", async () => {
+    render(<App />);
+    await enterDemo();
+    await createProduct();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Produtos", exact: true }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Editar Produto real de teste" }),
+    );
+    const file = new File(["foto"], "foto.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("Foto do produto"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar produto" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(
+      JSON.parse(localStorage.getItem("reposita.demo.v2")!).products[0]
+        .image_path,
+    ).toBe("data:image/webp;base64,AAAA");
+  });
+  it("importa CSV com prévia e cadastra lote", async () => {
+    render(<App />);
+    await enterDemo();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Produtos", exact: true }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Importar", exact: true }),
+    );
+    const file = new File(
+      ["Produto;SKU;Estoque\nImportado;IMP;7"],
+      "catalogo.csv",
+      { type: "text/csv" },
+    );
+    Object.defineProperty(file, "text", {
+      value: async () => "Produto;SKU;Estoque\nImportado;IMP;7",
+    });
+    fireEvent.change(screen.getByLabelText("Arquivo CSV"), {
+      target: { files: [file] },
+    });
+    await screen.findByText("Pronto para importar");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Importar 1 produtos" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByText("Importado")).toBeTruthy();
+    expect(
+      JSON.parse(localStorage.getItem("reposita.demo.v2")!).products[0].stock,
+    ).toBe(7);
+  });
+  it("restaura arquivado preservando cadastro", async () => {
+    localStorage.setItem(
+      "reposita.demo.v2",
+      JSON.stringify({
+        products: [
+          {
+            id: "p",
+            name: "Arquivado",
+            sku: "ARQ",
+            category: "Geral",
+            stock: 0,
+            min_stock: 5,
+            cost: 10,
+            price: 20,
+            active: false,
+            created_at: new Date().toISOString(),
+          },
+        ],
+        movements: [],
+      }),
+    );
+    render(<App />);
+    await enterDemo();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Produtos", exact: true }),
+    );
+    fireEvent.click(screen.getByLabelText("Arquivados"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restaurar Arquivado" }),
+    );
+    await waitFor(() =>
+      expect(
+        JSON.parse(localStorage.getItem("reposita.demo.v2")!).products[0]
+          .active,
+      ).toBe(true),
+    );
+  });
   it("cria produto e preserva após fechar e reabrir a aplicação", async () => {
     const view = render(<App />);
     await enterDemo();

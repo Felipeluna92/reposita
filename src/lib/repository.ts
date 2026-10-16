@@ -17,7 +17,13 @@ export function readDemo(): InventoryData {
   }
 }
 function persist(data: InventoryData) {
-  localStorage.setItem(storageKey, JSON.stringify(data));
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(data));
+  } catch {
+    throw new Error(
+      "Espaço local insuficiente. Exporte seu catálogo e use a conta Supabase para armazenar mais produtos e fotos. Nada foi alterado.",
+    );
+  }
   return data;
 }
 export function exampleData() {
@@ -139,11 +145,102 @@ export async function saveProduct(
         : [];
     return persist({ products, movements: [...opening, ...data.movements] });
   }
+  if (
+    input.image_path ||
+    input.description ||
+    input.barcode ||
+    input.supplier ||
+    input.location
+  ) {
+    const { error } = await supabase!
+      .from("reposita_products")
+      .select("image_path")
+      .limit(1);
+    if (error)
+      throw new Error(
+        "Execute a atualização SQL 202610160002_professional.sql no Supabase para ativar fotos e campos avançados.",
+      );
+  }
   const { error } = await supabase!.rpc("reposita_save_product", {
     p_id: id ?? null,
     p_input: input,
   });
   if (error) throw new Error(error.message);
+  return loadData(false);
+}
+export async function restoreProduct(
+  demo: boolean,
+  data: InventoryData,
+  id: string,
+) {
+  if (demo)
+    return persist({
+      ...data,
+      products: data.products.map((p) =>
+        p.id === id ? { ...p, active: true } : p,
+      ),
+    });
+  const { error } = await supabase!.rpc("reposita_restore_product", {
+    p_id: id,
+  });
+  if (error)
+    throw new Error(
+      "Não foi possível restaurar. Confira a atualização SQL: " + error.message,
+    );
+  return loadData(false);
+}
+export async function importProducts(
+  demo: boolean,
+  data: InventoryData,
+  items: ProductInput[],
+  request: string,
+) {
+  if (!items.length || items.length > 200)
+    throw new Error("Envie entre 1 e 200 produtos.");
+  const used = new Set(data.products.map((p) => p.sku).filter(Boolean));
+  items.forEach((input) => {
+    validateProduct(input);
+    if (input.sku && used.has(input.sku.trim()))
+      throw new Error("SKU duplicado: " + input.sku);
+    if (input.sku) used.add(input.sku.trim());
+  });
+  if (demo) {
+    const now = new Date().toISOString();
+    const products = items.map((input) => ({
+      ...input,
+      id: crypto.randomUUID(),
+      name: input.name.trim(),
+      category: input.category.trim() || "Geral",
+      stock: input.initial_stock,
+      active: true,
+      created_at: now,
+    }));
+    const movements: Movement[] = products
+      .filter((p) => p.stock > 0)
+      .map((p) => ({
+        id: crypto.randomUUID(),
+        product_id: p.id,
+        kind: "adjustment_in",
+        quantity: p.stock,
+        unit_cost: p.cost,
+        unit_price: p.price,
+        note: "Importação: saldo inicial",
+        created_at: now,
+      }));
+    return persist({
+      products: [...products, ...data.products],
+      movements: [...movements, ...data.movements],
+    });
+  }
+  const { error } = await supabase!.rpc("reposita_import_products", {
+    p_request: request,
+    p_items: items,
+  });
+  if (error)
+    throw new Error(
+      "Importação não concluída. Confira a atualização SQL e os dados: " +
+        error.message,
+    );
   return loadData(false);
 }
 export async function moveStock(
