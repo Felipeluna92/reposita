@@ -804,7 +804,7 @@ function Workspace({
         <footer>
           <span className="footer-brand">reposita</span>
           <span>•</span>Clareza no estoque. Confiança nas decisões.
-          <span className="footer-version">v0.4</span>
+          <span className="footer-version">v0.5</span>
         </footer>
       </main>
       {productForm && (

@@ -1,6 +1,12 @@
-# Reposita Professional · v0.4
+# Reposita Professional · v0.5
 
 Gestão universal de produtos, movimentação de estoque e simulação de preço/lucro. React + TypeScript + Vite, publicado na Vercel; Supabase Auth e Postgres para dados reais. Sem chamadas ao Lovable.
+
+## Editor da página de sugestões
+
+Em **Procura dos clientes → Link da loja → Personalizar página**, cada lojista pode alterar textos, cores, fonte, layout, logo e imagem de destaque, reorganizar/ocultar campos e adicionar até três perguntas de texto. A prévia usa o mesmo componente da página publicada, com formatos de celular/computador e estado de confirmação. As alterações são publicadas somente ao salvar, no mesmo link da loja. O editor alerta antes de descartar mudanças e valida contraste de leitura.
+
+Para ativar esta versão em um banco existente com 001–003, execute somente [`202610170004_store_pages.sql`](supabase/migrations/202610170004_store_pages.sql) no SQL Editor. O próprio editor também oferece **Copiar atualização do banco**. Não são necessárias novas chaves de API nem alterações nas configurações do Turnstile. Consulte [o guia do editor](docs/store-pages.md).
 
 ## Procura dos clientes → compras com propósito
 

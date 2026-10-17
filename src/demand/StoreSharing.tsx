@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Copy, ExternalLink } from "lucide-react";
 import { Dialog } from "../components/Dialog";
 import type { useDemand } from "./useDemand";
+import { StorePageEditor } from "./StorePageEditor";
 export function StoreSharing({
   demo,
   model,
@@ -13,6 +14,7 @@ export function StoreSharing({
   name: string;
   close: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(model.store?.name ?? name),
     [enabled, setEnabled] = useState(model.store?.enabled ?? false),
     [error, setError] = useState(""),
@@ -72,6 +74,19 @@ export function StoreSharing({
       setError((e as Error).message);
     }
   }
+  if (editing)
+    return (
+      <StorePageEditor
+        store={model.store}
+        name={title}
+        demo={demo}
+        close={() => setEditing(false)}
+        save={async (name, settings) => {
+          await model.customizeStore(name, settings);
+          setTitle(name);
+        }}
+      />
+    );
   return (
     <Dialog
       title="Um link para ouvir seus clientes"
@@ -82,6 +97,13 @@ export function StoreSharing({
         Compartilhe no balcão, no WhatsApp ou na bio. A página recebe
         solicitações; não publica estoque, preços de custo ou dados do painel.
       </p>
+      <button
+        className="secondary"
+        type="button"
+        onClick={() => setEditing(true)}
+      >
+        Personalizar página
+      </button>
       {demo ? (
         <p className="demo-banner">
           Demonstração local: o link funciona apenas neste navegador, sem envio

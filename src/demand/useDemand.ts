@@ -6,6 +6,7 @@ import type {
   PurchaseInput,
 } from "./types";
 import * as repo from "./repository";
+import type { PageSettings } from "./page-settings";
 export function useDemand(demo: boolean) {
   const [data, setData] = useState<DemandData>({
     demands: [],
@@ -69,5 +70,7 @@ export function useDemand(demo: boolean) {
     ) => mutate(() => repo.testAction(demo, id, action, note)),
     saveStore: (name: string, enabled: boolean, rotate = false) =>
       mutate(() => repo.saveStore(demo, name, enabled, rotate)),
+    customizeStore: (name: string, settings: PageSettings) =>
+      mutate(() => repo.customizeStore(demo, name, settings)),
   };
 }

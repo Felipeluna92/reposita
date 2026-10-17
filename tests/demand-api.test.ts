@@ -58,6 +58,38 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("ingestão pública protegida", () => {
+  it("valida respostas extras e não aceita rótulos forjados", async () => {
+    expect(
+      (
+        await receiveDemand(
+          req({
+            ...payload(),
+            input: {
+              ...payload().input,
+              custom_answers: [{ id: "q_1", value: "x".repeat(241) }],
+            },
+          }),
+        )
+      ).status,
+    ).toBe(400);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(
+      (
+        await receiveDemand(
+          req({
+            ...payload(),
+            input: {
+              ...payload().input,
+              custom_answers: [{ id: "q_1", label: "Forjado", value: "Local" }],
+            },
+          }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(rpc.mock.calls[0][1].p_input.custom_answers).toEqual([
+      { id: "q_1", value: "Local" },
+    ]);
+  });
   it("falha fechada sem credenciais, sem expor segredos", async () => {
     vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
     expect(await readiness().json()).toEqual({ enabled: false });

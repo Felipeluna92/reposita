@@ -11,6 +11,7 @@ export type DemandStatus =
   | "closed"
   | "ignored";
 export type DemandInput = {
+  custom_answers?: { id: string; label?: string; value: string }[];
   label: string;
   variant: string;
   product_id: string | null;
@@ -52,6 +53,7 @@ export type PurchaseTest = PurchaseInput & {
   outcome_note: string;
 };
 export type PublicStore = {
+  page_settings?: import("./page-settings").PageSettings;
   name: string;
   public_token: string;
   enabled: boolean;

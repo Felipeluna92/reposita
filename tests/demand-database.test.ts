@@ -2,6 +2,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
+import { pageSettings } from "../src/demand/page-settings";
 const db = new PGlite();
 const a = "11111111-1111-4111-8111-111111111111",
   b = "22222222-2222-4222-8222-222222222222";
@@ -335,5 +336,149 @@ describe.sequential("procura e testes no Postgres com RLS", () => {
     await expect(submit(randomUUID(), request, "b".repeat(64))).rejects.toThrow(
       "Loja indisponível",
     );
+  });
+  it("atualização do editor é aditiva e repetível, com imagens em bucket separado", async () => {
+    await db.exec("reset role;");
+    await db.exec(sql("202610170004_store_pages.sql"));
+    await db.exec(sql("202610170004_store_pages.sql"));
+    expect(
+      (await db.query("select stock,cost from public.reposita_products"))
+        .rows[0],
+    ).toMatchObject({ stock: 20, cost: "16.50" });
+    expect(
+      (
+        await db.query(
+          "select public from storage.buckets where id='reposita-products'",
+        )
+      ).rows[0],
+    ).toEqual({ public: false });
+    expect(
+      (
+        await db.query(
+          "select public from storage.buckets where id='reposita-store-pages'",
+        )
+      ).rows[0],
+    ).toEqual({ public: true });
+  });
+  it("loja altera a própria página sem mudar link ou ativação", async () => {
+    await user(a);
+    const settings = pageSettings();
+    settings.headline = "Sugira para {loja}";
+    settings.questions = [
+      { id: "q_1", label: "Qual marca?", placeholder: "", required: true },
+    ];
+    settings.fields = settings.fields.map((f) =>
+      f.key === "budget" ? { ...f, enabled: false } : f,
+    );
+    await db.query(
+      "select public.reposita_customize_public_store($1,$2::jsonb)",
+      ["Loja personalizada", JSON.stringify(settings)],
+    );
+    expect(
+      (
+        await db.query(
+          "select public_token,enabled,page_settings from public.reposita_public_stores",
+        )
+      ).rows[0],
+    ).toMatchObject({
+      public_token: token,
+      enabled: false,
+      page_settings: settings,
+    });
+    await db.query(
+      "select public.reposita_save_public_store('Loja personalizada',true,false)",
+    );
+    await publicRole();
+    const info = (
+      await db.query<{ info: Record<string, unknown> }>(
+        "select public.reposita_public_store_info($1) info",
+        [token],
+      )
+    ).rows[0].info;
+    expect(info.name).toBe("Loja personalizada");
+    expect(info.page_settings).toMatchObject({
+      headline: "Sugira para {loja}",
+    });
+    expect(info).not.toHaveProperty("user_id");
+    await expect(
+      db.query(
+        "select public.reposita_customize_public_store('Invadida',$1::jsonb)",
+        [JSON.stringify(settings)],
+      ),
+    ).rejects.toThrow();
+  });
+  it("outra conta não altera a página nem usa imagem alheia", async () => {
+    await user(b);
+    await db.query(
+      "select public.reposita_customize_public_store($1,$2::jsonb)",
+      ["Loja B", JSON.stringify(pageSettings())],
+    );
+    expect(
+      (await db.query("select name from public.reposita_public_stores")).rows,
+    ).toEqual([{ name: "Loja B" }]);
+    const s = pageSettings();
+    s.logo_path = a + "/" + randomUUID() + ".webp";
+    await expect(
+      db.query("select public.reposita_customize_public_store($1,$2::jsonb)", [
+        "Loja B",
+        JSON.stringify(s),
+      ]),
+    ).rejects.toThrow("pertencer");
+    await user(a);
+    expect(
+      (await db.query("select name from public.reposita_public_stores")).rows,
+    ).toEqual([{ name: "Loja personalizada" }]);
+  });
+  it("servidor exige resposta e usa rótulo confiável; dados ocultos são descartados", async () => {
+    await publicRole("service_role");
+    await expect(submit(randomUUID(), request, "c".repeat(64))).rejects.toThrow(
+      "Campo obrigatório",
+    );
+    const id = randomUUID();
+    await submit(
+      id,
+      {
+        ...request,
+        custom_answers: [
+          { id: "q_1", label: "Rótulo forjado", value: "Marca local" },
+        ],
+      },
+      "c".repeat(64),
+    );
+    expect(
+      (
+        await db.query(
+          "select budget,custom_answers from public.reposita_demands where id=$1",
+          [id],
+        )
+      ).rows[0],
+    ).toEqual({
+      budget: null,
+      custom_answers: [
+        { id: "q_1", label: "Qual marca?", value: "Marca local" },
+      ],
+    });
+    await expect(
+      submit(
+        randomUUID(),
+        { ...request, custom_answers: [{ id: "q_injetada", value: "X" }] },
+        "d".repeat(64),
+      ),
+    ).rejects.toThrow("Resposta adicional");
+  });
+  it("configurações inválidas não substituem a página publicada", async () => {
+    await user(a);
+    const invalid = pageSettings();
+    invalid.fields[0].enabled = false;
+    await expect(
+      db.query("select public.reposita_customize_public_store($1,$2::jsonb)", [
+        "Inválida",
+        JSON.stringify(invalid),
+      ]),
+    ).rejects.toThrow("inválida");
+    expect(
+      (await db.query("select name from public.reposita_public_stores"))
+        .rows[0],
+    ).toEqual({ name: "Loja personalizada" });
   });
 });

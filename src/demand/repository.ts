@@ -1,4 +1,9 @@
 import { supabase } from "../lib/supabase";
+import {
+  pageSettings,
+  validatePageSettings,
+  type PageSettings,
+} from "./page-settings";
 import { loadData, moveStock } from "../lib/repository";
 import type {
   Demand,
@@ -231,6 +236,7 @@ export async function saveStore(
     return persist({
       ...data,
       store: {
+        ...data.store,
         name,
         enabled,
         public_token: rotate
@@ -244,6 +250,39 @@ export async function saveStore(
     p_enabled: enabled,
     p_rotate: rotate,
   });
+  return loadDemand(false);
+}
+export async function customizeStore(
+  demo: boolean,
+  name: string,
+  settings: PageSettings,
+) {
+  validatePageSettings(settings);
+  if (!name.trim() || name.length > 80)
+    throw new Error("Informe um nome público de até 80 caracteres.");
+  if (demo) {
+    const data = readDemandDemo();
+    return persist({
+      ...data,
+      store: {
+        name,
+        enabled: data.store?.enabled ?? false,
+        public_token: data.store?.public_token ?? crypto.randomUUID(),
+        page_settings: pageSettings(settings),
+      },
+    });
+  }
+  try {
+    await rpc("reposita_customize_public_store", {
+      p_name: name,
+      p_settings: settings,
+    });
+  } catch (e) {
+    throw new Error(
+      "Não foi possível salvar a personalização. Se ainda não ativou o editor, execute 202610170004_store_pages.sql no SQL Editor do Supabase. Detalhe: " +
+        (e as Error).message,
+    );
+  }
   return loadDemand(false);
 }
 export async function submitDemoDemand(input: DemandInput, id: string) {

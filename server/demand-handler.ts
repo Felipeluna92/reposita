@@ -119,6 +119,22 @@ export async function receiveDemand(request: Request) {
       reason: "missing",
     };
     validateDemand(input);
+    if (v.custom_answers !== undefined) {
+      if (!Array.isArray(v.custom_answers) || v.custom_answers.length > 3)
+        throw new Error("Respostas adicionais inválidas.");
+      input.custom_answers = v.custom_answers.map((answer: unknown) => {
+        const a = answer as Record<string, unknown>;
+        if (
+          !a ||
+          typeof a.id !== "string" ||
+          !/^q_[a-z0-9]{1,32}$/.test(a.id) ||
+          typeof a.value !== "string" ||
+          a.value.length > 240
+        )
+          throw new Error("Resposta adicional inválida.");
+        return { id: a.id, value: a.value.trim() };
+      });
+    }
   } catch (e) {
     return json(
       {
@@ -214,6 +230,17 @@ export async function receiveDemand(request: Request) {
         return json(
           { error: "Esta loja não está recebendo solicitações." },
           404,
+        );
+      if (
+        message.includes("Campo obrigatório") ||
+        message.includes("Resposta adicional")
+      )
+        return json(
+          {
+            error:
+              "A página foi atualizada ou faltam respostas obrigatórias. Recarregue a página e confira os campos.",
+          },
+          400,
         );
       return json(
         {

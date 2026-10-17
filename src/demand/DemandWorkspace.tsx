@@ -290,6 +290,16 @@ export function DemandWorkspace({
                     </span>
                   </div>
                   {d.note && <p className="request-note">{d.note}</p>}
+                  {!!d.custom_answers?.length && (
+                    <dl className="request-note">
+                      {d.custom_answers.map((a) => (
+                        <div key={a.id}>
+                          <dt>{a.label || "Resposta adicional"}</dt>
+                          <dd>{a.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
                   <label>
                     Situação
                     <select
