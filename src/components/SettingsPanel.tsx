@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Download, ExternalLink, Moon, ShieldCheck, Sun } from "lucide-react";
 import type { InventoryData } from "../types";
+import type { DemandData } from "../demand/types";
 export function SettingsPanel({
   demo,
   email,
@@ -10,6 +11,7 @@ export function SettingsPanel({
   setTheme,
   data,
   upgraded,
+  demand,
 }: {
   demo: boolean;
   email?: string;
@@ -19,6 +21,7 @@ export function SettingsPanel({
   setTheme: (theme: "light" | "dark") => void;
   data: InventoryData;
   upgraded: boolean | null;
+  demand?: DemandData;
 }) {
   const [draft, setDraft] = useState(name);
   const [message, setMessage] = useState("");
@@ -27,7 +30,12 @@ export function SettingsPanel({
       new Blob(
         [
           JSON.stringify(
-            { version: 3, exported_at: new Date().toISOString(), ...data },
+            {
+              version: 4,
+              exported_at: new Date().toISOString(),
+              ...data,
+              demand,
+            },
             null,
             2,
           ),
@@ -94,9 +102,10 @@ export function SettingsPanel({
         </div>
         <h3>Exportação de segurança</h3>
         <p>
-          Baixe produtos e eventos em JSON para guardar uma cópia. As fotos
-          privadas não são incluídas no arquivo; ele contém somente suas
-          referências.
+          Baixe produtos, eventos e os dados carregados de procura e testes em
+          JSON para guardar uma cópia. Contatos autorizados também serão
+          exportados; guarde o arquivo com cuidado. As fotos privadas não são
+          incluídas no arquivo; ele contém somente suas referências.
         </p>
         <button className="secondary" onClick={backup}>
           <Download size={16} />

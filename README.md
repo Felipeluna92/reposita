@@ -1,6 +1,20 @@
-# Reposita Professional · v0.3
+# Reposita Professional · v0.4
 
 Gestão universal de produtos, movimentação de estoque e simulação de preço/lucro. React + TypeScript + Vite, publicado na Vercel; Supabase Auth e Postgres para dados reais. Sem chamadas ao Lovable.
+
+## Procura dos clientes → compras com propósito
+
+- **Procura:** registre produtos pedidos, variantes, motivo da venda não realizada, quantidade desejada, preço esperado e observações. Contato opcional com autorização explícita; situação, edição, exclusão de contato e exportação CSV.
+- **Link da loja + QR Code:** página pública sem login para registrar interesse; nome público configurável, ativação/desativação e rotação do link. Nenhum catálogo privado ou custo fica público. Recebimento pela internet depende da configuração de segurança abaixo.
+- **Oportunidades:** agrupa nomes equivalentes e variantes; o vínculo com o catálogo reúne grafias diferentes. Ordena por registros abertos e recência. Não confunde registros com pessoas únicas ou com vendas garantidas.
+- **Comparação de fornecedores:** salve uma oferta por plano; simule lote, frete total, embalagem por venda, taxas, impostos, preço e unidades esperadas no período. Três cenários explícitos, limitados ao lote, com caixa após a compra e contribuição. São hipóteses do usuário.
+- **Testes de compra:** salvar plano não movimenta estoque. Confirmar uma compra real cria entrada atômica/idempotente, com frete rateado. Depois acompanhe as vendas do produto na janela escolhida e registre o aprendizado ao encerrar.
+- **Custo médio ponderado:** compras passam a atualizar `(saldo anterior × custo anterior + compra × custo comprado) / novo saldo`, em centavos. Vendas antigas conservam o custo registrado. Ajustes e vendas não recalculam a média. Preço de catálogo não é alterado pela compra.
+- **Dashboard corrigido:** produtos sem preço definido não geram prejuízo potencial fictício; totais potencialmente incompletos são identificados.
+
+Para uma instalação que já tem as migrations 001 e 002, execute **somente** [`202610170003_demand.sql`](supabase/migrations/202610170003_demand.sql) no SQL Editor do Supabase e clique em Atualizar dados. Essa atualização é aditiva e repetível. Sem ela, estoque e catálogo continuam funcionando; as novas telas explicam a ativação. Nenhuma migration é executada automaticamente no seu banco.
+
+Veja [operação, segurança e configuração da página pública](docs/demand.md). Demonstração e conta real continuam separadas. Os novos dados demo ficam em `reposita.demand.v1`, preservando o catálogo `reposita.demo.v2`.
 
 ## Estado desta entrega
 
@@ -23,7 +37,7 @@ Gestão universal de produtos, movimentação de estoque e simulação de preço
 - Tema claro/escuro, botões com profundidade 3D, feedback de sucesso, navegação por teclado e respeito a `prefers-reduced-motion`.
 - Exportação JSON de produtos/eventos para cópia manual. Não inclui arquivos de foto nem restauração automática.
 
-Não inclui cobrança/assinaturas, equipe multiusuário, emissão fiscal, pedidos a fornecedores, IA/previsão de demanda, custo médio automático ou apuração fiscal. A reposição sugerida é uma regra simples de estoque mínimo, não uma previsão de vendas. O dashboard resume todo o histórico; Relatórios tem recorte configurável. Uma venda é uma movimentação, não um pedido com múltiplos itens.
+Não inclui cobrança/assinaturas, equipe multiusuário, emissão fiscal, envio de pedidos a fornecedores, IA/previsão de demanda ou apuração fiscal. A reposição sugerida é uma regra simples de estoque mínimo. O dashboard resume todo o histórico; Relatórios tem recorte configurável. Uma venda é uma movimentação, não um pedido com múltiplos itens.
 
 ## Atualizar uma instalação existente — importante
 
@@ -57,6 +71,9 @@ src/
     repository.ts            # adaptadores localStorage / Supabase
     supabase.ts              # cliente com chave pública
   types.ts
+  demand/                    # procura, oportunidades, cenários, página pública
+api/demand.ts                # endpoint Vercel, nunca incluído no bundle Vite
+server/demand-handler.ts     # CAPTCHA, validação, limites e ingestão privilegiada
 supabase/migrations/          # schema, índices, políticas e RPCs
 ```
 
@@ -77,7 +94,7 @@ Sem variáveis de ambiente, é possível explorar a demonstração. Para dados r
 
 1. No seu projeto Supabase, abra **SQL Editor → New query**.
 2. Copie o conteúdo de [`supabase/migrations/202610160001_reposita.sql`](supabase/migrations/202610160001_reposita.sql) e execute com **Run**. A migration cria somente objetos com prefixo `reposita_`, sem apagar dados de outras aplicações. Execute uma única vez. Se houver erro, a transação é revertida; não remova tabelas para tentar novamente.
-3. Execute também `202610160002_professional.sql` para fotos e recursos avançados. Em **Authentication → Providers**, habilite Email. Recomenda-se manter a confirmação de e-mail ativa. Ajuste SMTP e limites de envio antes de um lançamento público.
+3. Execute também `202610160002_professional.sql` para fotos e recursos avançados e `202610170003_demand.sql` para procura, compras e custo médio. Em **Authentication → Providers**, habilite Email. Recomenda-se manter a confirmação de e-mail ativa. Ajuste SMTP e limites de envio antes de um lançamento público.
 4. Em **Authentication → URL Configuration**, defina **Site URL** como o domínio real da Vercel e adicione esse mesmo domínio em **Redirect URLs**. Para desenvolvimento, adicione `http://localhost:5173`. Use URLs específicas para previews; não abra redirecionamentos indiscriminadamente.
 5. Copie `.env.example` para `.env.local` e preencha as configurações públicas. Não versione `.env.local`.
 
@@ -103,7 +120,7 @@ Um push na branch de produção vinculada dispara deploy na Vercel. Este reposit
 - RLS: cada usuário autenticado pode ler apenas suas próprias linhas. Sem acesso anônimo.
 - Escrita direta nas tabelas é revogada para clientes. RPCs `SECURITY DEFINER` têm `search_path` vazio, exigem `auth.uid()` e validam o proprietário; não aceitam `user_id` do cliente.
 - Saldo é atualizado com bloqueio de linha e histórico na mesma transação. Eventos não podem ser editados/excluídos pelo cliente; correções são novas movimentações.
-- Custo do cadastro é informado manualmente; registrar compra não calcula custo médio. Custo de venda é o valor informado na movimentação.
+- Após a migration 003, compras calculam custo médio ponderado; a edição manual do cadastro continua disponível para correções de custo atual. Custo de venda é o valor informado na movimentação. Não há recálculo retroativo.
 - Arquivar não significa vender/baixar estoque; primeiro registre uma saída com justificativa, quando apropriado.
 - Demo no navegador não tem isolamento de contas: não use em computador compartilhado para dados sensíveis. Logout da conta remove o painel da sessão, mas exportações feitas pelo usuário permanecem no dispositivo.
 - CSV exportado neutraliza fórmulas iniciadas por `=`, `+`, `-` e `@`. Preços são simulação gerencial, não apuração contábil ou fiscal.
@@ -121,4 +138,4 @@ Um push na branch de produção vinculada dispara deploy na Vercel. Este reposit
 
 ## Próximas evoluções
 
-Pedidos de compra com múltiplos itens, custo médio ponderado, gestão de fornecedores em módulo próprio, múltiplas lojas/equipes e faturamento SaaS. Essas evoluções não estão anunciadas como implementadas nesta versão.
+Pedidos de compra com múltiplos itens, gestão de fornecedores em módulo próprio, múltiplas lojas/equipes e faturamento SaaS. Essas evoluções não estão anunciadas como implementadas nesta versão.

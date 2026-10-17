@@ -4,7 +4,7 @@ import type {
   MovementKind,
   ProductInput,
 } from "../types";
-import { nonnegative } from "./finance";
+import { nonnegative, round } from "./finance";
 export const kindLabels: Record<MovementKind, string> = {
   purchase: "Entrada de compra",
   sale: "Venda",
@@ -58,9 +58,17 @@ export function applyMovement(
   const stock =
     product.stock + (isEntry(movement.kind) ? 1 : -1) * movement.quantity;
   if (stock < 0) throw new Error("Estoque insuficiente.");
+  const cost =
+    movement.kind === "purchase"
+      ? round(
+          (product.stock * product.cost +
+            movement.quantity * movement.unit_cost) /
+            stock,
+        )
+      : product.cost;
   return {
     products: data.products.map((p) =>
-      p.id === product.id ? { ...p, stock } : p,
+      p.id === product.id ? { ...p, stock, cost } : p,
     ),
     movements: [movement, ...data.movements],
   };

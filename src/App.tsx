@@ -25,6 +25,9 @@ import {
   ShoppingBag,
   Sun,
   X,
+  MessageCircle,
+  Radar,
+  FlaskConical,
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 import { Auth } from "./components/Auth";
@@ -43,11 +46,18 @@ import { reorder, summarize } from "./lib/reports";
 import { downloadCsv } from "./lib/csv";
 import { clearImageCache } from "./lib/images";
 import type { MovementKind, Product } from "./types";
+import { useDemand } from "./demand/useDemand";
+import { DemandWorkspace } from "./demand/DemandWorkspace";
+import { PublicDemand } from "./demand/PublicDemand";
+import "./demand/demand.css";
 const tabs = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
   { id: "products", label: "Produtos", icon: Package },
   { id: "movements", label: "Movimentações", icon: ArrowDownUp },
   { id: "reports", label: "Relatórios", icon: BarChart3 },
+  { id: "demand", label: "Procura dos clientes", icon: MessageCircle },
+  { id: "opportunities", label: "Oportunidades", icon: Radar },
+  { id: "purchase_tests", label: "Testes de compra", icon: FlaskConical },
   { id: "calculator", label: "Calculadora", icon: CalculatorIcon },
   { id: "settings", label: "Configurações", icon: Settings },
 ] as const;
@@ -90,6 +100,10 @@ export class AppBoundary extends Component<
   }
 }
 export default function App() {
+  const token = new URLSearchParams(window.location.search).get("procura");
+  return token ? <PublicDemand token={token} /> : <PrivateApp />;
+}
+function PrivateApp() {
   const [session, setSession] = useState<Session | null>(null);
   const [demo, setDemo] = useState(false);
   const [ready, setReady] = useState(!supabase);
@@ -235,6 +249,7 @@ function Workspace({
   exit: () => Promise<void>;
 }) {
   const inventory = useInventory(demo);
+  const demand = useDemand(demo);
   const [tab, setTab] = useState<Tab>("overview");
   const [lowFilter, setLowFilter] = useState(false);
   const [productForm, setProductForm] = useState<Product | "new" | null>(null);
@@ -273,6 +288,12 @@ function Workspace({
   const low = active.filter((p) => reorder(p) > 0);
   const costValue = active.reduce((a, p) => a + p.stock * p.cost, 0);
   const saleValue = active.reduce((a, p) => a + p.stock * p.price, 0);
+  const priced = active.filter((p) => p.price > 0);
+  const missingPrice = active.filter((p) => p.price <= 0 && p.stock > 0).length;
+  const potentialProfit = priced.reduce(
+    (a, p) => a + p.stock * (p.price - p.cost),
+    0,
+  );
   const report = summarize(inventory, "", "");
   const title = tabs.find((t) => t.id === tab)!.label;
   function goProducts(lowOnly = false) {
@@ -431,6 +452,7 @@ function Workspace({
               disabled={inventory.busy || inventory.loading}
               onClick={() => {
                 void inventory.reload();
+                void demand.reload();
               }}
             >
               <RefreshCw
@@ -512,14 +534,30 @@ function Workspace({
                   />
                   <Stat
                     label="Venda potencial"
-                    value={money(saleValue)}
-                    hint="Se todo o saldo for vendido"
+                    value={
+                      missingPrice && saleValue === 0
+                        ? "Defina os preços"
+                        : money(saleValue)
+                    }
+                    hint={
+                      missingPrice
+                        ? `Parcial · ${missingPrice} produtos com saldo sem preço`
+                        : "Se todo o saldo for vendido"
+                    }
                     icon={<ShoppingBag />}
                   />
                   <Stat
                     label="Lucro bruto potencial"
-                    value={money(saleValue - costValue)}
-                    hint="Antes de taxas e despesas"
+                    value={
+                      missingPrice && priced.every((p) => p.stock === 0)
+                        ? "Preço pendente"
+                        : money(potentialProfit)
+                    }
+                    hint={
+                      missingPrice
+                        ? "Parcial · somente itens com preço definido"
+                        : "Antes de taxas e despesas"
+                    }
                     icon={<ArrowUpRight />}
                   />
                   <Stat
@@ -529,6 +567,19 @@ function Workspace({
                     icon={<ArrowDownUp />}
                     warning={low.length > 0}
                   />
+                </section>
+                <section className="panel demand-overview">
+                  <div>
+                    <span className="eyebrow">SEU RADAR DE PROCURA</span>
+                    <h2>O próximo produto pode estar na conversa de hoje.</h2>
+                    <p>
+                      Registre o que seus clientes pedem e transforme interesse
+                      em compras mais conscientes.
+                    </p>
+                  </div>
+                  <button className="primary" onClick={() => setTab("demand")}>
+                    Abrir procura dos clientes <ArrowUpRight size={17} />
+                  </button>
                 </section>
                 <div className="overview-grid">
                   <section className="panel opportunities">
@@ -687,6 +738,20 @@ function Workspace({
                 busy={inventory.busy}
               />
             )}
+            {(tab === "demand" ||
+              tab === "opportunities" ||
+              tab === "purchase_tests") && (
+              <DemandWorkspace
+                view={tab}
+                model={demand}
+                inventory={inventory}
+                demo={demo}
+                name={name}
+                createProduct={() => setProductForm("new")}
+                reloadInventory={inventory.reload}
+                go={setTab}
+              />
+            )}
             {tab === "movements" && (
               <Movements
                 data={inventory}
@@ -715,6 +780,15 @@ function Workspace({
                 setTheme={setTheme}
                 data={inventory}
                 upgraded={upgraded}
+                demand={
+                  demand.error || demand.loading
+                    ? undefined
+                    : {
+                        demands: demand.demands,
+                        tests: demand.tests,
+                        store: demand.store,
+                      }
+                }
               />
             )}
           </>
@@ -730,7 +804,7 @@ function Workspace({
         <footer>
           <span className="footer-brand">reposita</span>
           <span>•</span>Clareza no estoque. Confiança nas decisões.
-          <span className="footer-version">v0.3</span>
+          <span className="footer-version">v0.4</span>
         </footer>
       </main>
       {productForm && (
