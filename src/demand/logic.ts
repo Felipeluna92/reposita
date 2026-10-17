@@ -1,4 +1,4 @@
-import { round, nonnegative } from "../lib/finance";
+import { round, nonnegative } from "../lib/finance.js";
 import type { InventoryData } from "../types";
 import type {
   Demand,

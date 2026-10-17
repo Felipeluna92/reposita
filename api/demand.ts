@@ -1,4 +1,4 @@
-import { readiness, receiveDemand } from "../server/demand-handler";
+import { readiness, receiveDemand } from "../server/demand-handler.js";
 export function GET() {
   return readiness();
 }
