@@ -21,11 +21,14 @@ execFileSync(
     "--skipLibCheck",
     "--esModuleInterop",
     "api/demand.ts",
+    "api/billing.ts",
+    "api/billing-webhook.ts",
   ],
   { cwd: fileURLToPath(root), stdio: "inherit" },
 );
 delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 delete process.env.TURNSTILE_SECRET_KEY;
+delete process.env.STRIPE_SECRET_KEY;
 const endpoint = await import(
   new URL("node_modules/.cache/reposita-function-check/api/demand.js", root)
 );
@@ -36,6 +39,30 @@ const disabled = await endpoint.POST(
   new Request("https://test.example/api/demand", { method: "POST" }),
 );
 assert.equal(disabled.status, 503);
+const billing = await import(
+  new URL("node_modules/.cache/reposita-function-check/api/billing.js", root)
+);
+const publicPlans = await billing.GET(
+  new Request("https://test.example/api/billing"),
+);
+assert.equal(publicPlans.status, 200);
+assert.equal((await publicPlans.json()).configured, false);
+const webhook = await import(
+  new URL(
+    "node_modules/.cache/reposita-function-check/api/billing-webhook.js",
+    root,
+  )
+);
+assert.equal(
+  (
+    await webhook.POST(
+      new Request("https://test.example/api/billing-webhook", {
+        method: "POST",
+      }),
+    )
+  ).status,
+  503,
+);
 console.log(
   "Function Node ESM: importação e bloqueio sem credenciais verificados.",
 );

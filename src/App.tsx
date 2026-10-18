@@ -1,6 +1,7 @@
 import {
   Component,
   useEffect,
+  useRef,
   useState,
   type ErrorInfo,
   type ReactNode,
@@ -28,6 +29,7 @@ import {
   MessageCircle,
   Radar,
   FlaskConical,
+  CreditCard,
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 import { Auth } from "./components/Auth";
@@ -50,6 +52,9 @@ import { useDemand } from "./demand/useDemand";
 import { DemandWorkspace } from "./demand/DemandWorkspace";
 import { PublicDemand } from "./demand/PublicDemand";
 import "./demand/demand.css";
+import { BillingPanel } from "./billing/BillingPanel";
+import { PricingLanding } from "./billing/PricingLanding";
+import { useBilling } from "./billing/useBilling";
 const tabs = [
   { id: "overview", label: "Visão geral", icon: LayoutDashboard },
   { id: "products", label: "Produtos", icon: Package },
@@ -59,6 +64,7 @@ const tabs = [
   { id: "opportunities", label: "Oportunidades", icon: Radar },
   { id: "purchase_tests", label: "Testes de compra", icon: FlaskConical },
   { id: "calculator", label: "Calculadora", icon: CalculatorIcon },
+  { id: "billing", label: "Planos e assinatura", icon: CreditCard },
   { id: "settings", label: "Configurações", icon: Settings },
 ] as const;
 type Tab = (typeof tabs)[number]["id"];
@@ -100,8 +106,15 @@ export class AppBoundary extends Component<
   }
 }
 export default function App() {
-  const token = new URLSearchParams(window.location.search).get("procura");
-  return token ? <PublicDemand token={token} /> : <PrivateApp />;
+  const query = new URLSearchParams(window.location.search);
+  const token = query.get("procura");
+  return token ? (
+    <PublicDemand token={token} />
+  ) : query.get("planos") === "1" ? (
+    <PricingLanding />
+  ) : (
+    <PrivateApp />
+  );
 }
 function PrivateApp() {
   const [session, setSession] = useState<Session | null>(null);
@@ -248,9 +261,16 @@ function Workspace({
   setTheme: (value: "light" | "dark") => void;
   exit: () => Promise<void>;
 }) {
-  const inventory = useInventory(demo);
-  const demand = useDemand(demo);
-  const [tab, setTab] = useState<Tab>("overview");
+  const inventoryModel = useInventory(demo);
+  const demandModel = useDemand(demo);
+  const billing = useBilling(demo, userId);
+  const [entry] = useState(() => new URLSearchParams(window.location.search));
+  const [tab, setTab] = useState<Tab>(
+    entry.has("assinar") || entry.has("billing") ? "billing" : "overview",
+  );
+  const [billingIssue, setBillingIssue] = useState("");
+  const [billingReturn, setBillingReturn] = useState("");
+  const returnHandled = useRef(false);
   const [lowFilter, setLowFilter] = useState(false);
   const [productForm, setProductForm] = useState<Product | "new" | null>(null);
   const [movementForm, setMovementForm] = useState<{
@@ -265,6 +285,168 @@ function Workspace({
   const [name, setName] = useState(() =>
     preference("reposita.business." + userId, "Meu negócio"),
   );
+  useEffect(() => {
+    if (demo || returnHandled.current) return;
+    returnHandled.current = true;
+    const url = new URL(window.location.href);
+    const returned = url.searchParams.get("billing");
+    for (const key of [
+      "billing",
+      "session_id",
+      "customer_id",
+      "assinar",
+      "cadastro",
+    ])
+      url.searchParams.delete(key);
+    window.history.replaceState(
+      window.history.state,
+      "",
+      url.pathname + url.search + url.hash,
+    );
+    if (["success", "manage", "cancel"].includes(returned ?? "")) {
+      setTab("billing");
+      setBillingReturn(
+        returned === "cancel"
+          ? "Pagamento interrompido. Conferindo sua assinatura…"
+          : "Conferindo sua assinatura com o gateway…",
+      );
+      // Synchronize only the authenticated account. URL parameters are never sent to billing.
+      void billing
+        .run("sync")
+        .then((result) => {
+          setBillingReturn(
+            result.notice ||
+              "Assinatura sincronizada. Confira o status abaixo.",
+          );
+        })
+        .catch(() =>
+          setBillingReturn(
+            "Não foi possível sincronizar o retorno. Use Sincronizar assinatura para tentar novamente.",
+          ),
+        );
+    }
+  }, [demo, billing.run]);
+
+  function requireWrite(additions = 0) {
+    if (demo) return;
+    const state = billing.state;
+    // Preserve the established inventory when the optional billing migration is absent/disabled.
+    if (
+      state &&
+      (!state.configured || state.setup_required || !state.settings.enabled)
+    )
+      return;
+    let message = "";
+    if (!state?.access) {
+      message = billing.loading
+        ? "Aguarde a verificação do plano antes de salvar."
+        : "Não foi possível verificar seu plano. Atualize a assinatura antes de salvar; seus dados continuam disponíveis para consulta e exportação.";
+    } else if (!state.access.is_owner) {
+      const access = state.access;
+      const deadline =
+        access.status === "trial"
+          ? access.trial_ends_at
+          : ["active", "trialing"].includes(access.status)
+            ? access.period_end
+            : null;
+      if (!access.allowed || (deadline && Date.parse(deadline) <= Date.now())) {
+        message =
+          "Seu período de acesso terminou. Escolha um plano para voltar a salvar. Seus dados continuam disponíveis para consulta e exportação.";
+      } else if (additions > 0 && access.product_limit !== null) {
+        const used = Math.max(
+          access.used,
+          inventoryModel.products.filter((product) => product.active).length,
+        );
+        if (used + additions > access.product_limit)
+          message = `Limite de ${access.product_limit} produtos ativos: ${used} usados, ${Math.max(0, access.product_limit - used)} vagas disponíveis. Arquive itens sem saldo ou escolha um plano maior. O lote não foi importado parcialmente.`;
+      }
+    }
+    if (message) {
+      setBillingIssue(message);
+      throw new Error(message);
+    }
+    setBillingIssue("");
+  }
+  function openWrite(open: () => void, additions = 0) {
+    try {
+      requireWrite(additions);
+      open();
+    } catch {
+      /* The billing notice explains how to continue. */
+    }
+  }
+  async function write<T>(action: () => Promise<T>, additions = 0): Promise<T> {
+    requireWrite(additions);
+    try {
+      const result = await action();
+      if (additions !== 0) void billing.reload();
+      return result;
+    } catch (cause) {
+      const message =
+        cause instanceof Error ? cause.message : "Não foi possível salvar.";
+      if (/assinatura|limite.*produtos|plano/i.test(message)) {
+        setBillingIssue(message);
+        void billing.reload();
+      }
+      throw cause;
+    }
+  }
+  const inventory = {
+    ...inventoryModel,
+    save: (...args: Parameters<typeof inventoryModel.save>) =>
+      write(() => inventoryModel.save(...args), args[1] ? 0 : 1),
+    move: (...args: Parameters<typeof inventoryModel.move>) =>
+      write(() => inventoryModel.move(...args)),
+    archive: (...args: Parameters<typeof inventoryModel.archive>) =>
+      write(() => inventoryModel.archive(...args), -1),
+    restore: (...args: Parameters<typeof inventoryModel.restore>) =>
+      write(() => inventoryModel.restore(...args), 1),
+    importItems: (...args: Parameters<typeof inventoryModel.importItems>) =>
+      write(() => inventoryModel.importItems(...args), args[0].length),
+  };
+  const demand = {
+    ...demandModel,
+    save: (...args: Parameters<typeof demandModel.save>) =>
+      write(() => demandModel.save(...args)),
+    action: (...args: Parameters<typeof demandModel.action>) =>
+      args[1] === "forget_contact"
+        ? demandModel.action(...args)
+        : write(() => demandModel.action(...args)),
+    saveTest: (...args: Parameters<typeof demandModel.saveTest>) =>
+      write(() => demandModel.saveTest(...args)),
+    testAction: (...args: Parameters<typeof demandModel.testAction>) =>
+      write(() => demandModel.testAction(...args)),
+    saveStore: (...args: Parameters<typeof demandModel.saveStore>) =>
+      write(() => demandModel.saveStore(...args)),
+    customizeStore: (...args: Parameters<typeof demandModel.customizeStore>) =>
+      write(() => demandModel.customizeStore(...args)),
+  };
+  const billingAccess = billing.state?.access;
+  const billingEnforced =
+    !demo &&
+    billing.state?.configured &&
+    billing.state.settings.enabled &&
+    !billing.state.setup_required;
+  const readOnly = Boolean(
+    billingEnforced &&
+      billingAccess &&
+      !billingAccess.is_owner &&
+      !billingAccess.allowed,
+  );
+  const quotaFull = Boolean(
+    billingEnforced &&
+      billingAccess &&
+      !billingAccess.is_owner &&
+      billingAccess.allowed &&
+      billingAccess.product_limit !== null &&
+      Math.max(
+        billingAccess.used,
+        inventory.products.filter((product) => product.active).length,
+      ) >= billingAccess.product_limit,
+  );
+  useEffect(() => {
+    setBillingIssue("");
+  }, [billing.state]);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 5000);
@@ -426,52 +608,55 @@ function Workspace({
             </span>
           </div>
         </div>
-        <header className="page-header">
-          <div>
-            <span className="eyebrow">
-              {tab === "overview"
-                ? "VISÃO CLARA. DECISÕES MELHORES."
-                : "SEU NEGÓCIO, BEM ORGANIZADO."}
-            </span>
-            <h1>
-              {tab === "overview"
-                ? "Mais controle. Mais possibilidades."
-                : title}
-            </h1>
-            <p>
-              {tab === "overview"
-                ? "O essencial do seu negócio, com a clareza que ele merece."
-                : "Uma operação mais simples, do primeiro produto ao próximo crescimento."}
-            </p>
-          </div>
-          <div className="header-actions">
-            <button
-              className="icon-button"
-              title="Atualizar dados"
-              aria-label="Atualizar dados"
-              disabled={inventory.busy || inventory.loading}
-              onClick={() => {
-                void inventory.reload();
-                void demand.reload();
-              }}
-            >
-              <RefreshCw
-                size={18}
-                className={inventory.loading ? "spin" : ""}
-              />
-            </button>
-            <button
-              className="primary"
-              disabled={
-                inventory.loading || !!inventory.error || inventory.busy
-              }
-              onClick={() => setProductForm("new")}
-            >
-              <Plus size={17} />
-              Novo produto
-            </button>
-          </div>
-        </header>
+        {tab !== "billing" && (
+          <header className="page-header">
+            <div>
+              <span className="eyebrow">
+                {tab === "overview"
+                  ? "VISÃO CLARA. DECISÕES MELHORES."
+                  : "SEU NEGÓCIO, BEM ORGANIZADO."}
+              </span>
+              <h1>
+                {tab === "overview"
+                  ? "Mais controle. Mais possibilidades."
+                  : title}
+              </h1>
+              <p>
+                {tab === "overview"
+                  ? "O essencial do seu negócio, com a clareza que ele merece."
+                  : "Uma operação mais simples, do primeiro produto ao próximo crescimento."}
+              </p>
+            </div>
+            <div className="header-actions">
+              <button
+                className="icon-button"
+                title="Atualizar dados"
+                aria-label="Atualizar dados"
+                disabled={inventory.busy || inventory.loading}
+                onClick={() => {
+                  void inventory.reload();
+                  void demand.reload();
+                  void billing.reload();
+                }}
+              >
+                <RefreshCw
+                  size={18}
+                  className={inventory.loading ? "spin" : ""}
+                />
+              </button>
+              <button
+                className="primary"
+                disabled={
+                  inventory.loading || !!inventory.error || inventory.busy
+                }
+                onClick={() => openWrite(() => setProductForm("new"), 1)}
+              >
+                <Plus size={17} />
+                Novo produto
+              </button>
+            </div>
+          </header>
+        )}
         {demo && (
           <div className="demo-banner">
             <span>
@@ -489,6 +674,54 @@ function Workspace({
             )}
           </div>
         )}
+        {!demo && (
+          <div className="billing-root billing-workspace-status">
+            <div className="billing-usage-strip" role="status">
+              <span>
+                {billing.loading
+                  ? "Verificando plano…"
+                  : billingEnforced && billingAccess
+                    ? `${billingAccess.is_owner ? "Owner isento" : billingAccess.status === "trial" ? `Teste grátis · ${billing.state?.settings.trial_days} dias` : readOnly ? "Acesso para consulta" : "Seu plano"} · ${Math.max(billingAccess.used, active.length)} / ${billingAccess.product_limit === null ? "sem limite" : billingAccess.product_limit} produtos`
+                    : billing.error && !billing.state
+                      ? "Não foi possível verificar o plano"
+                      : "Assinaturas aguardando configuração"}
+                {billingEnforced &&
+                  billingAccess?.status === "trial" &&
+                  billingAccess.trial_ends_at &&
+                  ` · até ${new Date(billingAccess.trial_ends_at).toLocaleDateString("pt-BR")}`}
+              </span>
+              <button
+                type="button"
+                className="billing-button billing-button-secondary"
+                onClick={() => setTab("billing")}
+              >
+                Ver planos
+              </button>
+            </div>
+            {(readOnly || quotaFull || billingIssue) && (
+              <div className="billing-message" role="alert">
+                {billingIssue ||
+                  (readOnly
+                    ? "Seu acesso para gravação terminou. Seus dados permanecem disponíveis para consulta e exportação. Escolha um plano para voltar a salvar."
+                    : "Limite de produtos ativos atingido. Você pode editar e movimentar os produtos existentes. Para cadastrar ou restaurar, arquive itens sem saldo ou escolha um plano maior.")}
+              </div>
+            )}
+            {billingReturn && <p role="status">{billingReturn}</p>}
+            {tab === "billing" && entry.get("assinar") && (
+              <p>
+                Plano escolhido:{" "}
+                {billing.state?.plans.find(
+                  (plan) => plan.code === entry.get("assinar"),
+                )?.name || entry.get("assinar")}
+                . Confira os detalhes abaixo e clique para assinar. Nenhuma
+                cobrança é iniciada automaticamente.
+              </p>
+            )}
+          </div>
+        )}
+        {tab === "billing" && (
+          <BillingPanel {...billing} demo={demo} userId={userId} />
+        )}
         {!demo && upgraded === false && !inventory.error && (
           <div className="upgrade-banner">
             <div>
@@ -503,7 +736,7 @@ function Workspace({
             </button>
           </div>
         )}
-        {inventory.error ? (
+        {tab === "billing" ? null : inventory.error ? (
           <div className="panel error" role="alert">
             <h2>Não conseguimos carregar seus dados</h2>
             <p>{inventory.error}</p>
@@ -702,7 +935,7 @@ function Workspace({
                   </button>
                   <button
                     disabled={!active.length}
-                    onClick={() => setMovementForm({})}
+                    onClick={() => openWrite(() => setMovementForm({}))}
                   >
                     <ArrowDownUp size={21} />
                     <span>
@@ -719,11 +952,13 @@ function Workspace({
                 key={String(lowFilter)}
                 data={inventory}
                 initialLow={lowFilter}
-                edit={setProductForm}
-                create={() => setProductForm("new")}
+                edit={(product) => openWrite(() => setProductForm(product))}
+                create={() => openWrite(() => setProductForm("new"), 1)}
                 archive={(p) => {
-                  setArchive(p);
-                  setActionError("");
+                  openWrite(() => {
+                    setArchive(p);
+                    setActionError("");
+                  });
                 }}
                 restore={async (p) => {
                   try {
@@ -733,8 +968,12 @@ function Workspace({
                     setActionError((e as Error).message);
                   }
                 }}
-                sale={(p) => setMovementForm({ product: p.id, kind: "sale" })}
-                importCsv={() => setImportOpen(true)}
+                sale={(p) =>
+                  openWrite(() =>
+                    setMovementForm({ product: p.id, kind: "sale" }),
+                  )
+                }
+                importCsv={() => openWrite(() => setImportOpen(true), 1)}
                 busy={inventory.busy}
               />
             )}
@@ -747,7 +986,7 @@ function Workspace({
                 inventory={inventory}
                 demo={demo}
                 name={name}
-                createProduct={() => setProductForm("new")}
+                createProduct={() => openWrite(() => setProductForm("new"), 1)}
                 reloadInventory={inventory.reload}
                 go={setTab}
               />
@@ -755,7 +994,7 @@ function Workspace({
             {tab === "movements" && (
               <Movements
                 data={inventory}
-                create={() => setMovementForm({})}
+                create={() => openWrite(() => setMovementForm({}))}
                 busy={inventory.busy}
               />
             )}
@@ -804,7 +1043,7 @@ function Workspace({
         <footer>
           <span className="footer-brand">reposita</span>
           <span>•</span>Clareza no estoque. Confiança nas decisões.
-          <span className="footer-version">v0.5</span>
+          <span className="footer-version">v0.6</span>
         </footer>
       </main>
       {productForm && (

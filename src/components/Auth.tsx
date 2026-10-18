@@ -1,7 +1,12 @@
 import { useState, type FormEvent } from "react";
 import { supabase, configError } from "../lib/supabase";
 export function Auth({ demo }: { demo: () => void }) {
-  const [mode, setMode] = useState<"login" | "signup" | "reset">("login");
+  const [mode, setMode] = useState<"login" | "signup" | "reset">(() => {
+    const query = new URLSearchParams(window.location.search);
+    return query.get("cadastro") === "1" || query.has("assinar")
+      ? "signup"
+      : "login";
+  });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,7 +32,12 @@ export function Auth({ demo }: { demo: () => void }) {
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: window.location.origin },
+          options: {
+            emailRedirectTo:
+              window.location.origin +
+              window.location.pathname +
+              window.location.search,
+          },
         });
         if (error) throw error;
         if (!data.session)
@@ -161,6 +171,9 @@ export function Auth({ demo }: { demo: () => void }) {
           Na demonstração, os dados são locais e não migram automaticamente para
           a conta.
         </p>
+        <a className="text-link" href="/?planos=1">
+          Ver planos
+        </a>
       </section>
     </main>
   );

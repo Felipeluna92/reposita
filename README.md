@@ -1,6 +1,20 @@
-# Reposita Professional · v0.5
+# Reposita Professional · v0.6
 
 Gestão universal de produtos, movimentação de estoque e simulação de preço/lucro. React + TypeScript + Vite, publicado na Vercel; Supabase Auth e Postgres para dados reais. Sem chamadas ao Lovable.
+
+## Planos e pagamentos
+
+Assinaturas mensais com Stripe Checkout e portal para cartão, faturas e cancelamento. A tela **Planos e assinatura** mostra uso, teste grátis, vencimento, contratação e troca de plano. A página pública `/?planos=1` apresenta preços obtidos do banco, pronta para compartilhar em campanhas depois da ativação.
+
+| Plano | Mensalidade | Produtos ativos |
+| --- | --- | --- |
+| Essencial | R$ 29,90 | 100 |
+| Profissional | R$ 59,90 | 1.000 |
+| Negócios | R$ 119,90 | 5.000 |
+
+Teste grátis inicial: 7 dias, 50 produtos, sem cartão. Limite por cadastro de produto ativo, inclusive com saldo zero; não por unidade em estoque. Todos os planos incluem os módulos existentes. A conta administradora é isenta. Preços são configurações do aplicativo e devem ser revisados pelo responsável antes da ativação.
+
+**Ativação necessária:** aplique a migration 005, registre sua conta como administradora, configure a chave Stripe somente no servidor e use **Preparar Stripe**. A configuração começa desligada e em teste; criar os planos não inicia cobranças reais. A própria tela copia a atualização SQL e o registro da conta atual. O [guia completo de pagamentos](docs/billing.md) descreve o teste, a passagem para produção e os limites operacionais. Produtos e histórico existentes são preservados.
 
 ## Editor da página de sugestões
 
@@ -43,7 +57,7 @@ Veja [operação, segurança e configuração da página pública](docs/demand.m
 - Tema claro/escuro, botões com profundidade 3D, feedback de sucesso, navegação por teclado e respeito a `prefers-reduced-motion`.
 - Exportação JSON de produtos/eventos para cópia manual. Não inclui arquivos de foto nem restauração automática.
 
-Não inclui cobrança/assinaturas, equipe multiusuário, emissão fiscal, envio de pedidos a fornecedores, IA/previsão de demanda ou apuração fiscal. A reposição sugerida é uma regra simples de estoque mínimo. O dashboard resume todo o histórico; Relatórios tem recorte configurável. Uma venda é uma movimentação, não um pedido com múltiplos itens.
+Não inclui equipe multiusuário, emissão fiscal, envio de pedidos a fornecedores, IA/previsão de demanda ou apuração fiscal. A reposição sugerida é uma regra simples de estoque mínimo. O dashboard resume todo o histórico; Relatórios tem recorte configurável. Uma venda é uma movimentação, não um pedido com múltiplos itens.
 
 ## Atualizar uma instalação existente — importante
 
@@ -78,7 +92,10 @@ src/
     supabase.ts              # cliente com chave pública
   types.ts
   demand/                    # procura, oportunidades, cenários, página pública
+  billing/                   # planos, checkout, acesso e administração
 api/demand.ts                # endpoint Vercel, nunca incluído no bundle Vite
+api/billing.ts               # sessão verificada, checkout e portal Stripe
+api/billing-webhook.ts       # confirmação assinada de pagamentos
 server/demand-handler.ts     # CAPTCHA, validação, limites e ingestão privilegiada
 supabase/migrations/          # schema, índices, políticas e RPCs
 ```
@@ -144,4 +161,4 @@ Um push na branch de produção vinculada dispara deploy na Vercel. Este reposit
 
 ## Próximas evoluções
 
-Pedidos de compra com múltiplos itens, gestão de fornecedores em módulo próprio, múltiplas lojas/equipes e faturamento SaaS. Essas evoluções não estão anunciadas como implementadas nesta versão.
+Pedidos de compra com múltiplos itens, gestão de fornecedores em módulo próprio e múltiplas lojas/equipes. Essas evoluções não estão anunciadas como implementadas nesta versão.
