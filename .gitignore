@@ -4,3 +4,6 @@ dist/
 !.env.example
 .vercel/
 coverage/
+
+# vídeos baixados pela skill analisar-reel
+reels/
